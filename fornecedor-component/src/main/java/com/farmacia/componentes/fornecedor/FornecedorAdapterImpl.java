@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class FornecedorAdapterImpl implements FornecedorAdapter {
 
-    private static final Set<String> SEM_ESTOQUE = Set.of("ritalina");
+    private static final Set<String> SEM_ESTOQUE = Set.of("ibuprofeno");
 
     private static final Path SPOOL = Path.of(
         System.getProperty("java.io.tmpdir"), "fornecedor-legado.log");
