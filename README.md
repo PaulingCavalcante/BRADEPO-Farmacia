@@ -57,11 +57,11 @@ curl -X POST http://localhost:8080/venda \
   -d "{\"cpf\":\"00000000000\",\"produto\":\"Dipirona\"}"
 ```
 
-#### Produto sem estoque (Ritalina)
+#### Produto sem estoque (Ibuprofeno)
 ```bash
 curl -X POST http://localhost:8080/venda \
   -H "Content-Type: application/json" \
-  -d "{\"cpf\":\"529.982.247-25\",\"produto\":\"Ritalina\"}"
+  -d "{\"cpf\":\"529.982.247-25\",\"produto\":\"Ibuprofeno\"}"
 ```
 
 #### Listar notas emitidas
