@@ -41,6 +41,10 @@ public class VendaService {
         String cpf = req.get("cpf");
         String produto = req.get("produto");
 
+        if (produto.trim().isEmpty()){
+            return Map.of("status", "NEGADA", "motivo", "Requisição vazia");
+        }
+
         if (!cpfValidator.validar(cpf)) {
             return Map.of("status", "NEGADA", "motivo", "CPF invalido");
         }
