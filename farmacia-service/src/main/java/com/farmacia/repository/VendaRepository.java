@@ -1,21 +1,21 @@
 package com.farmacia.repository;
 
+import com.farmacia.dto.VendaResponse;
 import org.springframework.stereotype.Repository;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 @Repository
 public class VendaRepository {
 
-    private final List<Map<String, Object>> notas = new ArrayList<>();
+    private final List<VendaResponse> notas = new ArrayList<>();
 
-    public void salvar(Map<String, Object> nota) {
+    public void salvar(VendaResponse nota) {
         notas.add(nota);
     }
 
-    public List<Map<String, Object>> listarTodas() {
+    public List<VendaResponse> listarTodas() {
         return notas;
     }
 }

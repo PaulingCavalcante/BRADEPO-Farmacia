@@ -5,12 +5,12 @@ import com.farmacia.componentes.cpf.CpfValidator;
 import com.farmacia.componentes.fornecedor.FornecedorAdapter;
 import com.farmacia.componentes.sefaz.NotaFiscal;
 import com.farmacia.componentes.sefaz.SefazClient;
+import com.farmacia.dto.VendaRequest;
+import com.farmacia.dto.VendaResponse;
 import com.farmacia.repository.VendaRepository;
 import org.springframework.stereotype.Service;
 
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -37,40 +37,36 @@ public class VendaService {
         this.repository = repository;
     }
 
-    public Map<String, Object> processar(Map<String, String> req) {
-        String cpf = req.get("cpf");
-        String produto = req.get("produto");
+    public VendaResponse processar(VendaRequest req) {
+        String cpf = req.cpf();
+        String produto = req.produto();
 
-        if (produto.trim().isEmpty()){
-            return Map.of("status", "NEGADA", "motivo", "Requisição vazia");
+        if (produto == null || produto.trim().isEmpty()) {
+            return new VendaResponse("NEGADA", null, null, null, "Requisição vazia");
         }
 
         if (!cpfValidator.validar(cpf)) {
-            return Map.of("status", "NEGADA", "motivo", "CPF invalido");
+            return new VendaResponse("NEGADA", null, null, null, "CPF invalido");
         }
 
         if (!fornecedor.consultar(produto)) {
-            return Map.of("status", "NEGADA", "motivo", "produto sem estoque");
+            return new VendaResponse("NEGADA", null, null, null, "produto sem estoque");
         }
 
         NotaFiscal nota = new NotaFiscal(UUID.randomUUID().toString(), cpf, produto);
         String protocoloSefaz = sefaz.enviarNota(nota);
 
-        Map<String, Object> resposta = new LinkedHashMap<>();
-        resposta.put("status", "AUTORIZADA");
-        resposta.put("nota", nota);
-        resposta.put("protocoloSefaz", protocoloSefaz);
-
+        String protocoloAns = null;
         if (CONTROLADOS.contains(produto.toLowerCase())) {
-            String protocoloAns = ans.enviarReceita(cpf, produto);
-            resposta.put("protocoloAns", protocoloAns);
+            protocoloAns = ans.enviarReceita(cpf, produto);
         }
 
+        VendaResponse resposta = new VendaResponse("AUTORIZADA", nota, protocoloSefaz, protocoloAns, null);
         repository.salvar(resposta);
         return resposta;
     }
 
-    public List<Map<String, Object>> listarNotas() {
+    public List<VendaResponse> listarNotas() {
         return repository.listarTodas();
     }
 }
