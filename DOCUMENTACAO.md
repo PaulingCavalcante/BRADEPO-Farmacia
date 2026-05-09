@@ -28,18 +28,32 @@ BRADECO-Farmacia/
 ## Para Que Serve Cada Pasta
 
 ### `farmacia-service/`
-**O orquestrador central.** É o único módulo que sobe como aplicação Spring Boot. Contém o único endpoint REST do sistema e chama todos os outros componentes em sequência para processar uma venda.
+**O orquestrador central.** É o único módulo que sobe como aplicação Spring Boot. Recebe as requisições REST, executa as regras de negócio e persiste os dados em memória.
 
 ```
 farmacia-service/
 └── src/main/
     ├── java/com/farmacia/
-    │   └── FarmaciaApplication.java   ← Ponto de entrada + controlador REST
+    │   ├── FarmaciaApplication.java          ← Ponto de entrada Spring Boot
+    │   ├── controller/
+    │   │   └── VendaController.java          ← Endpoints REST (POST /venda, GET /notas)
+    │   ├── service/
+    │   │   └── VendaService.java             ← Orquestração das regras de negócio
+    │   ├── repository/
+    │   │   └── VendaRepository.java          ← Armazenamento em memória
+    │   └── dto/
+    │       ├── VendaRequest.java             ← Corpo da requisição POST /venda
+    │       └── VendaResponse.java            ← Corpo das respostas da API
     └── resources/
-        └── application.properties     ← Configuração da porta (8080)
+        └── application.properties            ← Configuração da porta (8080)
 ```
 
-- **`FarmaciaApplication.java`** — Contém o `main()`, os endpoints `POST /venda` e `GET /notas`, e mantém a lista de notas em memória (`List<Map<String, Object>>`).
+- **`FarmaciaApplication.java`** — Contém apenas o `main()`. Ponto de entrada do Spring Boot.
+- **`VendaController.java`** — Recebe as requisições HTTP e delega para o `VendaService`.
+- **`VendaService.java`** — Orquestra CPF, estoque, SEFAZ e ANS para processar a venda.
+- **`VendaRepository.java`** — Mantém a lista de notas autorizadas em memória (`List<VendaResponse>`).
+- **`VendaRequest.java`** — DTO de entrada: campos `cpf` e `produto`.
+- **`VendaResponse.java`** — DTO de saída: campos `status`, `nota`, `protocoloSefaz`, `protocoloAns`, `motivo`.
 
 ---
 
@@ -102,7 +116,7 @@ fornecedor-component/
     └── FornecedorAdapterImpl.java    ← Implementação com lista fixa de produtos
 ```
 
-- Mantém uma lista fixa de produtos **sem estoque** (ex: Ritalina).
+- Mantém uma lista fixa de produtos **sem estoque** (ex: Ibuprofeno).
 - Grava cada consulta num arquivo de spool em: `{java.io.tmpdir}/fornecedor-legado.log`.
   - Formato da linha: `LocalDateTime|produto|OK/SEM_ESTOQUE`
 
@@ -147,32 +161,31 @@ Body: { "cpf": "529.982.247-25", "produto": "Diazepam" }
 ```
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                  FarmaciaApplication                     │
-│                                                         │
-│  1. Validar CPF ──────────────► CpfValidatorImpl        │
-│     └─ CPF inválido?                                    │
-│        └─► Retorna: { status: "NEGADA",                 │
-│                       motivo: "CPF invalido" }           │
-│                                                         │
-│  2. Verificar estoque ────────► FornecedorAdapterImpl   │
-│     └─ Sem estoque?                                     │
-│        └─► Retorna: { status: "NEGADA",                 │
-│                       motivo: "produto sem estoque" }    │
-│                                                         │
-│  3. Criar NotaFiscal ─────────► NotaFiscal(UUID, ...)   │
-│                                                         │
-│  4. Emitir NF-e ──────────────► SefazClientImpl        │
-│     └─► protocoloSefaz: "SEFAZ-{timestamp}"             │
-│                                                         │
-│  5. Produto controlado? ──────► AnsClientImpl           │
-│     (rivotril/diazepam/ritalina)                        │
-│     └─► protocoloAns: "ANS-{timestamp}"                 │
-│                                                         │
-│  6. Salvar em memória (List<notas>)                     │
-│                                                         │
-│  7. Retornar resposta final ◄────────────────────────── │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  VendaController                                             │
+│  └─► VendaService.processar(VendaRequest)                    │
+│                                                              │
+│  1. Validar CPF ───────────────► CpfValidatorImpl            │
+│     └─ CPF inválido?                                         │
+│        └─► VendaResponse(status=NEGADA, motivo=CPF invalido) │
+│                                                              │
+│  2. Verificar estoque ─────────► FornecedorAdapterImpl       │
+│     └─ Sem estoque?                                          │
+│        └─► VendaResponse(status=NEGADA, motivo=sem estoque)  │
+│                                                              │
+│  3. Criar NotaFiscal ──────────► NotaFiscal(UUID, ...)       │
+│                                                              │
+│  4. Emitir NF-e ───────────────► SefazClientImpl             │
+│     └─► protocoloSefaz: "SEFAZ-{timestamp}"                  │
+│                                                              │
+│  5. Produto controlado? ───────► AnsClientImpl               │
+│     (rivotril/diazepam/ritalina)                             │
+│     └─► protocoloAns: "ANS-{timestamp}"                      │
+│                                                              │
+│  6. Salvar VendaResponse em VendaRepository                  │
+│                                                              │
+│  7. Retornar VendaResponse ◄──────────────────────────────── │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 **Resposta de sucesso (produto comum):**
@@ -180,7 +193,9 @@ Body: { "cpf": "529.982.247-25", "produto": "Diazepam" }
 {
   "status": "AUTORIZADA",
   "nota": { "id": "uuid", "cpf": "529.982.247-25", "produto": "Dipirona" },
-  "protocoloSefaz": "SEFAZ-1714123456789"
+  "protocoloSefaz": "SEFAZ-1714123456789",
+  "protocoloAns": null,
+  "motivo": null
 }
 ```
 
@@ -190,7 +205,8 @@ Body: { "cpf": "529.982.247-25", "produto": "Diazepam" }
   "status": "AUTORIZADA",
   "nota": { "id": "uuid", "cpf": "529.982.247-25", "produto": "Diazepam" },
   "protocoloSefaz": "SEFAZ-1714123456789",
-  "protocoloAns": "ANS-1714123456790"
+  "protocoloAns": "ANS-1714123456790",
+  "motivo": null
 }
 ```
 
@@ -198,6 +214,9 @@ Body: { "cpf": "529.982.247-25", "produto": "Diazepam" }
 ```json
 {
   "status": "NEGADA",
+  "nota": null,
+  "protocoloSefaz": null,
+  "protocoloAns": null,
   "motivo": "CPF invalido"
 }
 ```
@@ -237,7 +256,7 @@ curl -X POST http://localhost:8080/venda \
 # Produto sem estoque
 curl -X POST http://localhost:8080/venda \
   -H "Content-Type: application/json" \
-  -d '{"cpf":"529.982.247-25","produto":"Ritalina"}'
+  -d '{"cpf":"529.982.247-25","produto":"Ibuprofeno"}'
 
 # Listar todas as notas
 curl http://localhost:8080/notas
