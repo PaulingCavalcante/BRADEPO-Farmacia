@@ -1,21 +1,12 @@
 package com.farmacia.repository;
 
-import com.farmacia.dto.VendaResponse;
-import org.springframework.stereotype.Repository;
+import com.farmacia.model.Venda;
+import org.springframework.data.jpa.repository.JpaRepository;
 
-import java.util.ArrayList;
-import java.util.List;
-
-@Repository
-public class VendaRepository {
-
-    private final List<VendaResponse> notas = new ArrayList<>();
-
-    public void salvar(VendaResponse nota) {
-        notas.add(nota);
-    }
-
-    public List<VendaResponse> listarTodas() {
-        return notas;
-    }
+/**
+ * Repositório JPA das vendas. O Spring Data implementa em tempo de execução;
+ * não precisa de {@code @Repository}. Substitui o antigo armazenamento em
+ * memória ({@code ArrayList}).
+ */
+public interface VendaRepository extends JpaRepository<Venda, Long> {
 }

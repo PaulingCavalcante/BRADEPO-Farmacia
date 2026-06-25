@@ -7,9 +7,11 @@ import com.farmacia.componentes.sefaz.NotaFiscal;
 import com.farmacia.componentes.sefaz.SefazClient;
 import com.farmacia.dto.VendaRequest;
 import com.farmacia.dto.VendaResponse;
+import com.farmacia.model.Venda;
 import com.farmacia.repository.VendaRepository;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -61,12 +63,24 @@ public class VendaService {
             protocoloAns = ans.enviarReceita(cpf, produto);
         }
 
-        VendaResponse resposta = new VendaResponse("AUTORIZADA", nota, protocoloSefaz, protocoloAns, null);
-        repository.salvar(resposta);
-        return resposta;
+        // Persiste a venda autorizada no banco (NEGADAs não são gravadas, como antes).
+        Venda venda = new Venda("AUTORIZADA", cpf, produto, nota.id(),
+                protocoloSefaz, protocoloAns, null, LocalDateTime.now());
+        repository.save(venda);
+
+        return new VendaResponse("AUTORIZADA", nota, protocoloSefaz, protocoloAns, null);
     }
 
     public List<VendaResponse> listarNotas() {
-        return repository.listarTodas();
+        return repository.findAll().stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
+    /** Reconstrói o DTO de resposta a partir da entidade persistida. */
+    private VendaResponse toResponse(Venda v) {
+        NotaFiscal nota = new NotaFiscal(v.getNotaId(), v.getCpf(), v.getProduto());
+        return new VendaResponse(v.getStatus(), nota, v.getProtocoloSefaz(),
+                v.getProtocoloAns(), v.getMotivo());
     }
 }
