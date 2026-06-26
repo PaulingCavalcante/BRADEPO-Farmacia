@@ -57,6 +57,11 @@
             <artifactId>fornecedor-component</artifactId>
             <version>1.0.0</version>
         </dependency>
+        <dependency>
+            <groupId>com.farmacia.componentes</groupId>
+            <artifactId>desconto-component</artifactId>
+            <version>1.0.0</version>
+        </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>

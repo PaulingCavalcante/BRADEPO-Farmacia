@@ -16,6 +16,7 @@
         <module>sefaz-component</module>
         <module>ans-component</module>
         <module>fornecedor-component</module>
+        <module>desconto-component</module>
         <module>farmacia-service</module>
     </modules>
 </project>

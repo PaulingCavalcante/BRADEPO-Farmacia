@@ -7,6 +7,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
@@ -48,6 +49,22 @@ public class Venda {
 
     @Column(name = "data_hora")
     private LocalDateTime dataHora;
+
+    // ===== Fase 4 — valores e desconto =====
+    @Column(name = "valor_bruto", precision = 10, scale = 2)
+    private BigDecimal valorBruto;
+
+    @Column(name = "percentual_desconto", precision = 10, scale = 2)
+    private BigDecimal percentualDesconto;
+
+    @Column(name = "valor_desconto", precision = 10, scale = 2)
+    private BigDecimal valorDesconto;
+
+    @Column(name = "valor_liquido", precision = 10, scale = 2)
+    private BigDecimal valorLiquido;
+
+    @Column(name = "descricao_desconto")
+    private String descricaoDesconto;
 
     /** Construtor sem argumentos exigido pelo JPA. */
     protected Venda() {
@@ -100,5 +117,45 @@ public class Venda {
 
     public LocalDateTime getDataHora() {
         return dataHora;
+    }
+
+    public BigDecimal getValorBruto() {
+        return valorBruto;
+    }
+
+    public void setValorBruto(BigDecimal valorBruto) {
+        this.valorBruto = valorBruto;
+    }
+
+    public BigDecimal getPercentualDesconto() {
+        return percentualDesconto;
+    }
+
+    public void setPercentualDesconto(BigDecimal percentualDesconto) {
+        this.percentualDesconto = percentualDesconto;
+    }
+
+    public BigDecimal getValorDesconto() {
+        return valorDesconto;
+    }
+
+    public void setValorDesconto(BigDecimal valorDesconto) {
+        this.valorDesconto = valorDesconto;
+    }
+
+    public BigDecimal getValorLiquido() {
+        return valorLiquido;
+    }
+
+    public void setValorLiquido(BigDecimal valorLiquido) {
+        this.valorLiquido = valorLiquido;
+    }
+
+    public String getDescricaoDesconto() {
+        return descricaoDesconto;
+    }
+
+    public void setDescricaoDesconto(String descricaoDesconto) {
+        this.descricaoDesconto = descricaoDesconto;
     }
 }
