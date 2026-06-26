@@ -57,7 +57,18 @@ public class VendaService {
         }
         Produto produto = cadastrado.get();
 
-        if (!cpfValidator.validar(cpf)) {
+        // Regra Fase 3: produto controlado exige CPF do cliente (válido); produto
+        // comum pode ser vendido sem CPF (NF avulsa), mas se o CPF vier, valida.
+        boolean temCpf = cpf != null && !cpf.isBlank();
+        if (produto.isControlado()) {
+            if (!temCpf) {
+                return new VendaResponse("NEGADA", null, null, null,
+                        "produto controlado exige CPF do cliente");
+            }
+            if (!cpfValidator.validar(cpf)) {
+                return new VendaResponse("NEGADA", null, null, null, "CPF invalido");
+            }
+        } else if (temCpf && !cpfValidator.validar(cpf)) {
             return new VendaResponse("NEGADA", null, null, null, "CPF invalido");
         }
 
