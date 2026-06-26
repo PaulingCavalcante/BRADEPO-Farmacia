@@ -11,6 +11,7 @@ import com.farmacia.componentes.sefaz.SefazClient;
 import com.farmacia.dto.ResumoFinanceiro;
 import com.farmacia.dto.VendaRequest;
 import com.farmacia.dto.VendaResponse;
+import com.farmacia.model.Canal;
 import com.farmacia.model.Cliente;
 import com.farmacia.model.Produto;
 import com.farmacia.model.Venda;
@@ -19,6 +20,8 @@ import com.farmacia.repository.ProdutoRepository;
 import com.farmacia.repository.VendaRepository;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -26,6 +29,9 @@ import java.util.UUID;
 
 @Service
 public class VendaService {
+
+    /** Comissão do vendedor em vendas de balcão: 5% sobre o valor líquido. */
+    private static final BigDecimal COMISSAO_PERCENTUAL = new BigDecimal("0.05");
 
     private final CpfValidator cpfValidator;
     private final FornecedorAdapter fornecedor;
@@ -60,6 +66,26 @@ public class VendaService {
 
         if (nomeProduto == null || nomeProduto.trim().isEmpty()) {
             return negada("Requisição vazia");
+        }
+
+        // Fase 5: canal da venda. INTERNET é o padrão quando omitido; BALCAO exige vendedor.
+        Canal canal;
+        if (req.canal() == null || req.canal().isBlank()) {
+            canal = Canal.INTERNET;
+        } else {
+            try {
+                canal = Canal.valueOf(req.canal().trim().toUpperCase());
+            } catch (IllegalArgumentException e) {
+                return negada("canal invalido: use INTERNET ou BALCAO");
+            }
+        }
+        String vendedor = (req.vendedor() == null || req.vendedor().isBlank())
+                ? null : req.vendedor().trim();
+        if (canal == Canal.BALCAO && vendedor == null) {
+            return negada("venda no balcao exige o vendedor");
+        }
+        if (canal != Canal.BALCAO) {
+            vendedor = null; // comissão/vendedor só fazem sentido no balcão
         }
 
         // O produto precisa estar cadastrado (fonte da verdade sobre controlado/estoque/preço).
@@ -108,6 +134,11 @@ public class VendaService {
                 cliente.map(Cliente::isIdoso).orElse(false),
                 cliente.map(Cliente::isConvenio).orElse(false)));
 
+        // Fase 5: comissão do vendedor só em venda de balcão (5% do valor líquido).
+        BigDecimal comissao = (canal == Canal.BALCAO)
+                ? desconto.valorLiquido().multiply(COMISSAO_PERCENTUAL).setScale(2, RoundingMode.HALF_UP)
+                : null;
+
         // Baixa de estoque do produto cadastrado.
         produto.setEstoque(produto.getEstoque() - 1);
         produtoRepository.save(produto);
@@ -120,11 +151,16 @@ public class VendaService {
         venda.setValorDesconto(desconto.valorDesconto());
         venda.setValorLiquido(desconto.valorLiquido());
         venda.setDescricaoDesconto(desconto.descricao());
+        venda.setCanal(canal);
+        venda.setVendedor(vendedor);
+        venda.setComissao(comissao);
         repository.save(venda);
 
         return new VendaResponse("AUTORIZADA", nota, protocoloSefaz, protocoloAns, null,
+                canal.name(), vendedor,
                 new ResumoFinanceiro(produto.getPreco(), desconto.percentual(),
-                        desconto.valorDesconto(), desconto.valorLiquido(), desconto.descricao()));
+                        desconto.valorDesconto(), desconto.valorLiquido(), desconto.descricao(),
+                        comissao));
     }
 
     public List<VendaResponse> listarNotas() {
@@ -135,7 +171,7 @@ public class VendaService {
 
     /** Resposta de venda recusada (sem nota nem valores). */
     private VendaResponse negada(String motivo) {
-        return new VendaResponse("NEGADA", null, null, null, motivo, null);
+        return new VendaResponse("NEGADA", null, null, null, motivo, null, null, null);
     }
 
     /** Reconstrói o DTO de resposta a partir da entidade persistida. */
@@ -143,8 +179,9 @@ public class VendaService {
         NotaFiscal nota = new NotaFiscal(v.getNotaId(), v.getCpf(), v.getProduto());
         ResumoFinanceiro financeiro = new ResumoFinanceiro(v.getValorBruto(),
                 v.getPercentualDesconto(), v.getValorDesconto(), v.getValorLiquido(),
-                v.getDescricaoDesconto());
+                v.getDescricaoDesconto(), v.getComissao());
+        String canal = v.getCanal() == null ? null : v.getCanal().name();
         return new VendaResponse(v.getStatus(), nota, v.getProtocoloSefaz(),
-                v.getProtocoloAns(), v.getMotivo(), financeiro);
+                v.getProtocoloAns(), v.getMotivo(), canal, v.getVendedor(), financeiro);
     }
 }

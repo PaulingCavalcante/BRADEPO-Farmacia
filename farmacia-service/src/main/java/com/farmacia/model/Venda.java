@@ -2,6 +2,8 @@ package com.farmacia.model;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -65,6 +67,15 @@ public class Venda {
 
     @Column(name = "descricao_desconto")
     private String descricaoDesconto;
+
+    // ===== Fase 5 — canal e comissão =====
+    @Enumerated(EnumType.STRING)
+    private Canal canal;
+
+    private String vendedor;
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal comissao;
 
     /** Construtor sem argumentos exigido pelo JPA. */
     protected Venda() {
@@ -157,5 +168,29 @@ public class Venda {
 
     public void setDescricaoDesconto(String descricaoDesconto) {
         this.descricaoDesconto = descricaoDesconto;
+    }
+
+    public Canal getCanal() {
+        return canal;
+    }
+
+    public void setCanal(Canal canal) {
+        this.canal = canal;
+    }
+
+    public String getVendedor() {
+        return vendedor;
+    }
+
+    public void setVendedor(String vendedor) {
+        this.vendedor = vendedor;
+    }
+
+    public BigDecimal getComissao() {
+        return comissao;
+    }
+
+    public void setComissao(BigDecimal comissao) {
+        this.comissao = comissao;
     }
 }
