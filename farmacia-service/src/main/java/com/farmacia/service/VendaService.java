@@ -7,64 +7,82 @@ import com.farmacia.componentes.sefaz.NotaFiscal;
 import com.farmacia.componentes.sefaz.SefazClient;
 import com.farmacia.dto.VendaRequest;
 import com.farmacia.dto.VendaResponse;
+import com.farmacia.model.Produto;
 import com.farmacia.model.Venda;
+import com.farmacia.repository.ProdutoRepository;
 import com.farmacia.repository.VendaRepository;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Set;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
 public class VendaService {
-
-    private static final Set<String> CONTROLADOS = Set.of("rivotril", "diazepam", "ritalina");
 
     private final CpfValidator cpfValidator;
     private final FornecedorAdapter fornecedor;
     private final SefazClient sefaz;
     private final AnsClient ans;
     private final VendaRepository repository;
+    private final ProdutoRepository produtoRepository;
 
     public VendaService(CpfValidator cpfValidator,
                         FornecedorAdapter fornecedor,
                         SefazClient sefaz,
                         AnsClient ans,
-                        VendaRepository repository) {
+                        VendaRepository repository,
+                        ProdutoRepository produtoRepository) {
         this.cpfValidator = cpfValidator;
         this.fornecedor = fornecedor;
         this.sefaz = sefaz;
         this.ans = ans;
         this.repository = repository;
+        this.produtoRepository = produtoRepository;
     }
 
     public VendaResponse processar(VendaRequest req) {
         String cpf = req.cpf();
-        String produto = req.produto();
+        String nomeProduto = req.produto();
 
-        if (produto == null || produto.trim().isEmpty()) {
+        if (nomeProduto == null || nomeProduto.trim().isEmpty()) {
             return new VendaResponse("NEGADA", null, null, null, "Requisição vazia");
         }
+
+        // O produto precisa estar cadastrado (fonte da verdade sobre controlado/estoque/preço).
+        Optional<Produto> cadastrado = produtoRepository.findByNomeIgnoreCase(nomeProduto.trim());
+        if (cadastrado.isEmpty()) {
+            return new VendaResponse("NEGADA", null, null, null, "produto nao cadastrado");
+        }
+        Produto produto = cadastrado.get();
 
         if (!cpfValidator.validar(cpf)) {
             return new VendaResponse("NEGADA", null, null, null, "CPF invalido");
         }
 
-        if (!fornecedor.consultar(produto)) {
+        // Disponibilidade no fornecedor (componente externo) e estoque local da farmácia.
+        if (!fornecedor.consultar(produto.getNome())) {
+            return new VendaResponse("NEGADA", null, null, null, "produto indisponivel no fornecedor");
+        }
+        if (produto.getEstoque() <= 0) {
             return new VendaResponse("NEGADA", null, null, null, "produto sem estoque");
         }
 
-        NotaFiscal nota = new NotaFiscal(UUID.randomUUID().toString(), cpf, produto);
+        NotaFiscal nota = new NotaFiscal(UUID.randomUUID().toString(), cpf, produto.getNome());
         String protocoloSefaz = sefaz.enviarNota(nota);
 
         String protocoloAns = null;
-        if (CONTROLADOS.contains(produto.toLowerCase())) {
-            protocoloAns = ans.enviarReceita(cpf, produto);
+        if (produto.isControlado()) {
+            protocoloAns = ans.enviarReceita(cpf, produto.getNome());
         }
 
+        // Baixa de estoque do produto cadastrado.
+        produto.setEstoque(produto.getEstoque() - 1);
+        produtoRepository.save(produto);
+
         // Persiste a venda autorizada no banco (NEGADAs não são gravadas, como antes).
-        Venda venda = new Venda("AUTORIZADA", cpf, produto, nota.id(),
+        Venda venda = new Venda("AUTORIZADA", cpf, produto.getNome(), nota.id(),
                 protocoloSefaz, protocoloAns, null, LocalDateTime.now());
         repository.save(venda);
 
