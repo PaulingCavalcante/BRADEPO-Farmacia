@@ -1,265 +1,219 @@
-# BRADECO Farmácia — Documentação do Projeto
+# BRADEPO Farmácia — Documentação do Projeto (v2)
 
 ## Visão Geral
 
-O **BRADECO Farmácia** é um sistema de vendas farmacêuticas construído com **Java 17** e **Spring Boot 3.2.5**, organizado como um projeto **Maven multi-módulo**. Ele simula o fluxo completo de uma venda em farmácia: validação do CPF do cliente, verificação de estoque junto ao fornecedor, emissão de Nota Fiscal Eletrônica (NF-e) via SEFAZ e notificação da ANS para medicamentos controlados.
+O **BRADEPO Farmácia** é um sistema de vendas farmacêuticas em **Java 17** e
+**Spring Boot 3.2.5**, organizado como projeto **Maven multi-módulo** com
+**arquitetura baseada em componentes**. Cobre o fluxo de venda de ponta a ponta:
+validação do CPF, consulta de disponibilidade no fornecedor, emissão de NF-e
+(SEFAZ), notificação à ANS para controlados, cálculo de **desconto** e de
+**comissão**, baixa de estoque e **persistência em MySQL**.
 
-Todas as integrações externas (SEFAZ, ANS, Fornecedor) são **simuladas em memória** — não há banco de dados nem chamadas HTTP reais.
+As integrações externas (SEFAZ, ANS, Fornecedor) são **simuladas** dentro de
+componentes-jar reutilizáveis. A persistência (JPA/MySQL) vive apenas no
+`farmacia-service`; os componentes não conhecem JPA.
 
 ---
 
 ## Estrutura de Pastas
 
 ```
-BRADECO-Farmacia/
-├── .claude/                     # Configurações locais do Claude Code (não versionar segredos)
-├── .github/                     # Scripts de automação de CI/CD (ex: upgrade de Java)
-│   └── java-upgrade/
-├── farmacia-service/            # Módulo principal — aplicação Spring Boot
-├── cpf-validator-component/     # Módulo — validação de CPF
-├── sefaz-component/             # Módulo — emissão de NF-e (integração SEFAZ)
-├── ans-component/               # Módulo — notificação de medicamentos controlados (ANS)
-├── fornecedor-component/        # Módulo — adaptador para o sistema legado do fornecedor
-└── pom.xml                      # POM raiz (agrega todos os módulos)
+BRADEPO-Farmacia/
+├── cpf-validator-component/     # Componente — validação de CPF
+├── sefaz-component/             # Componente — emissão de NF-e (SEFAZ)
+├── ans-component/               # Componente — notificação de controlados (ANS)
+├── fornecedor-component/        # Componente — disponibilidade no fornecedor (legado)
+├── desconto-component/          # Componente — cálculo de desconto
+├── farmacia-service/            # Aplicação Spring Boot (orquestrador + REST + JPA)
+├── db/                          # Banco populado: dump + instruções
+│   ├── farmacia-dump.sql
+│   └── README.md
+├── demo/                        # Roteiro de demonstração para o vídeo
+│   └── roteiro.ps1
+└── pom.xml                      # POM raiz (agrega os módulos)
 ```
 
 ---
 
-## Para Que Serve Cada Pasta
+## Componentes (jars reutilizáveis)
 
-### `farmacia-service/`
-**O orquestrador central.** É o único módulo que sobe como aplicação Spring Boot. Recebe as requisições REST, executa as regras de negócio e persiste os dados em memória.
+Cada componente expõe uma **interface** e uma **implementação** (`@Component`),
+em pacotes `com.farmacia.componentes.*`. São jars puros que declaram apenas
+`spring-context` (`spring.version=6.1.6`), sem Spring Boot.
 
-```
-farmacia-service/
-└── src/main/
-    ├── java/com/farmacia/
-    │   ├── FarmaciaApplication.java          ← Ponto de entrada Spring Boot
-    │   ├── controller/
-    │   │   └── VendaController.java          ← Endpoints REST (POST /venda, GET /notas)
-    │   ├── service/
-    │   │   └── VendaService.java             ← Orquestração das regras de negócio
-    │   ├── repository/
-    │   │   └── VendaRepository.java          ← Armazenamento em memória
-    │   └── dto/
-    │       ├── VendaRequest.java             ← Corpo da requisição POST /venda
-    │       └── VendaResponse.java            ← Corpo das respostas da API
-    └── resources/
-        └── application.properties            ← Configuração da porta (8080)
-```
+### `cpf-validator-component`
+Validação de CPF (algoritmo módulo 11): limpa não-dígitos, exige 11 dígitos,
+rejeita sequências repetidas e confere os dois dígitos verificadores.
+Reutilizado tanto na venda quanto no cadastro de clientes.
 
-- **`FarmaciaApplication.java`** — Contém apenas o `main()`. Ponto de entrada do Spring Boot.
-- **`VendaController.java`** — Recebe as requisições HTTP e delega para o `VendaService`.
-- **`VendaService.java`** — Orquestra CPF, estoque, SEFAZ e ANS para processar a venda.
-- **`VendaRepository.java`** — Mantém a lista de notas autorizadas em memória (`List<VendaResponse>`).
-- **`VendaRequest.java`** — DTO de entrada: campos `cpf` e `produto`.
-- **`VendaResponse.java`** — DTO de saída: campos `status`, `nota`, `protocoloSefaz`, `protocoloAns`, `motivo`.
+### `sefaz-component`
+Emissão simulada de NF-e. `NotaFiscal(id, cpf, produto)` é um `record`; o
+`SefazClient` gera um protocolo `SEFAZ-{timestamp}`.
 
----
+### `ans-component`
+Notificação simulada à ANS para medicamentos controlados; gera `ANS-{timestamp}`.
 
-### `cpf-validator-component/`
-**Validação do CPF do cliente.** Isola a lógica de validação num componente reutilizável, separada do serviço principal.
+### `fornecedor-component`
+Adaptador do sistema legado do fornecedor: indica disponibilidade e grava um
+spool em `{java.io.tmpdir}/fornecedor-legado.log`.
 
-```
-cpf-validator-component/
-└── src/main/java/com/farmacia/componentes/cpf/
-    ├── CpfValidator.java        ← Interface pública
-    └── CpfValidatorImpl.java    ← Implementação com algoritmo módulo 11
-```
+### `desconto-component`  *(novo no Projeto 2)*
+Cálculo de desconto sem dependência do domínio nem de JPA — recebe um
+`DescontoContexto(valorBruto, clienteCadastrado, idoso, convenio)` e devolve um
+`DescontoResultado(percentual, valorDesconto, valorLiquido, descricao)`.
 
-- Remove caracteres não numéricos.
-- Verifica se possui exatamente 11 dígitos.
-- Rejeita sequências repetidas (ex: `00000000000`).
-- Calcula e confere os dois dígitos verificadores pelo algoritmo módulo 11.
+Regras:
+- Cliente **não** cadastrado: sem desconto.
+- Cliente cadastrado: desconto **progressivo** do fabricante por faixa de valor
+  (5% até R$50; 8% de R$50 a R$150; 12% acima de R$150).
+- Idoso **com** convênio: também recebe o desconto de convênio (15%); aplica-se
+  a **maior vantagem** entre convênio e fabricante (conforme enunciado).
 
 ---
 
-### `sefaz-component/`
-**Emissão de Nota Fiscal Eletrônica.** Simula a comunicação com a SEFAZ (Secretaria da Fazenda) para autorizar a NF-e de cada venda.
+## `farmacia-service` (orquestrador)
+
+Único módulo que sobe como aplicação Spring Boot. Injeção sempre por construtor.
 
 ```
-sefaz-component/
-└── src/main/java/com/farmacia/componentes/sefaz/
-    ├── SefazClient.java         ← Interface pública
-    ├── SefazClientImpl.java     ← Implementação simulada
-    └── NotaFiscal.java          ← Record com os dados da nota (id, cpf, produto)
+farmacia-service/src/main/
+├── java/com/farmacia/
+│   ├── FarmaciaApplication.java        ← main() Spring Boot
+│   ├── controller/
+│   │   ├── VendaController.java        ← POST /venda, GET /notas
+│   │   ├── ProdutoController.java      ← CRUD /produtos
+│   │   ├── ClienteController.java      ← CRUD /clientes
+│   │   └── RelatorioController.java    ← /relatorios/*
+│   ├── service/
+│   │   ├── VendaService.java           ← orquestra a venda
+│   │   ├── ProdutoService.java         ← regras de produto
+│   │   ├── ClienteService.java         ← regras de cliente (reusa CpfValidator)
+│   │   └── RelatorioService.java       ← relatórios
+│   ├── repository/                     ← interfaces Spring Data JPA
+│   │   ├── VendaRepository.java
+│   │   ├── ProdutoRepository.java
+│   │   └── ClienteRepository.java
+│   ├── model/                          ← entidades JPA + enums
+│   │   ├── Venda.java   Produto.java   Cliente.java
+│   │   └── Categoria.java   Canal.java
+│   └── dto/                            ← records de entrada/saída
+└── resources/
+    ├── application.properties          ← datasource MySQL + JPA + seed
+    └── data.sql                        ← seed de produtos e clientes
 ```
 
-- Gera um protocolo único no formato `SEFAZ-{timestamp}`.
-- Loga no console: `[SEFAZ] Nota {id} autorizada -> {protocolo}`.
+### Entidades (tabelas)
+
+**`produto`** — `id`, `nome` (único), `categoria` (`MEDICAMENTO`|`HIGIENE`),
+`preco`, `estoque`, `controlado`. A flag `controlado` é a **fonte única** sobre
+quais produtos exigem ANS (substituiu a antiga lista fixa no código).
+
+**`cliente`** — `id`, `cpf` (único), `nome`, `idoso`, `convenio`. O cadastro
+habilita os descontos.
+
+**`venda`** — `id`, `status`, `cpf`, `produto`, `nota_id`, `protocolo_sefaz`,
+`protocolo_ans`, `motivo`, `data_hora`, `valor_bruto`, `percentual_desconto`,
+`valor_desconto`, `valor_liquido`, `descricao_desconto`, `canal`, `vendedor`,
+`comissao`. Só vendas **AUTORIZADAS** são gravadas.
 
 ---
 
-### `ans-component/`
-**Notificação de medicamentos controlados.** Simula o registro na ANS (Agência Nacional de Saúde) quando o produto vendido exige receita controlada.
+## Fluxo de uma Venda — `POST /venda`
+
+Corpo: `{ "cpf": "...", "produto": "...", "canal": "INTERNET|BALCAO", "vendedor": "..." }`
 
 ```
-ans-component/
-└── src/main/java/com/farmacia/componentes/ans/
-    ├── AnsClient.java           ← Interface pública
-    └── AnsClientImpl.java       ← Implementação simulada
+VendaController → VendaService.processar(VendaRequest)
+
+ 1. Produto vazio?                         → NEGADA "Requisição vazia"
+ 2. Canal: INTERNET (padrão) ou BALCAO     → BALCAO sem vendedor: NEGADA
+ 3. Produto cadastrado?  (ProdutoRepository)→ não: NEGADA "produto nao cadastrado"
+ 4. Regra de CPF (Fase 3):
+      - controlado  → CPF obrigatório e válido (CpfValidator)
+      - comum       → CPF opcional; se vier, valida
+ 5. Disponível no fornecedor? (FornecedorAdapter) → não: NEGADA
+ 6. Estoque local > 0?                      → não: NEGADA "produto sem estoque"
+ 7. Emite NF-e (SefazClient)                → protocoloSefaz
+ 8. Controlado? (AnsClient)                 → protocoloAns
+ 9. Desconto (CalculadoraDesconto):
+      - cadastrado? idoso? convenio? → percentual e valor
+10. Comissão (se BALCAO): 5% do valor líquido
+11. Baixa estoque (ProdutoRepository.save)
+12. Persiste a Venda (VendaRepository.save)
+13. Retorna VendaResponse (AUTORIZADA, nota, protocolos, canal, vendedor, financeiro)
 ```
 
-- Ativado apenas para: **Rivotril**, **Diazepam** e **Ritalina** (case-insensitive).
-- Gera protocolo no formato `ANS-{timestamp}`.
-- Loga no console: `[ANS] Receita registrada (cpf=..., produto=...) -> {protocolo}`.
-
----
-
-### `fornecedor-component/`
-**Adaptador para o sistema legado do fornecedor.** Verifica a disponibilidade do produto em estoque, representando a integração com um sistema externo legado.
-
-```
-fornecedor-component/
-└── src/main/java/com/farmacia/componentes/fornecedor/
-    ├── FornecedorAdapter.java        ← Interface pública
-    └── FornecedorAdapterImpl.java    ← Implementação com lista fixa de produtos
-```
-
-- Mantém uma lista fixa de produtos **sem estoque** (ex: Ibuprofeno).
-- Grava cada consulta num arquivo de spool em: `{java.io.tmpdir}/fornecedor-legado.log`.
-  - Formato da linha: `LocalDateTime|produto|OK/SEM_ESTOQUE`
-
----
-
-### `.github/java-upgrade/`
-Scripts de automação para atualização da versão do Java no projeto. Não faz parte do fluxo de negócio da aplicação.
-
-### `.claude/`
-Configurações locais do Claude Code para o projeto. Não afeta a aplicação em tempo de execução.
-
----
-
-## Fluxo Completo: Do Início ao Fim
-
-### 1. Inicialização
-
-```bash
-# Na raiz do projeto — compila todos os módulos
-mvn clean install
-
-# Sobe a aplicação
-cd farmacia-service
-mvn spring-boot:run
-```
-
-O Spring Boot inicializa e injeta automaticamente via construtor:
-- `CpfValidatorImpl`
-- `FornecedorAdapterImpl`
-- `SefazClientImpl`
-- `AnsClientImpl`
-
-A aplicação fica disponível em `http://localhost:8080`.
-
----
-
-### 2. Fluxo de uma Venda — `POST /venda`
-
-```
-Cliente envia: POST /venda
-Body: { "cpf": "529.982.247-25", "produto": "Diazepam" }
-```
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  VendaController                                             │
-│  └─► VendaService.processar(VendaRequest)                    │
-│                                                              │
-│  1. Validar CPF ───────────────► CpfValidatorImpl            │
-│     └─ CPF inválido?                                         │
-│        └─► VendaResponse(status=NEGADA, motivo=CPF invalido) │
-│                                                              │
-│  2. Verificar estoque ─────────► FornecedorAdapterImpl       │
-│     └─ Sem estoque?                                          │
-│        └─► VendaResponse(status=NEGADA, motivo=sem estoque)  │
-│                                                              │
-│  3. Criar NotaFiscal ──────────► NotaFiscal(UUID, ...)       │
-│                                                              │
-│  4. Emitir NF-e ───────────────► SefazClientImpl             │
-│     └─► protocoloSefaz: "SEFAZ-{timestamp}"                  │
-│                                                              │
-│  5. Produto controlado? ───────► AnsClientImpl               │
-│     (rivotril/diazepam/ritalina)                             │
-│     └─► protocoloAns: "ANS-{timestamp}"                      │
-│                                                              │
-│  6. Salvar VendaResponse em VendaRepository                  │
-│                                                              │
-│  7. Retornar VendaResponse ◄──────────────────────────────── │
-└──────────────────────────────────────────────────────────────┘
-```
-
-**Resposta de sucesso (produto comum):**
+**Resposta autorizada (resumida):**
 ```json
 {
   "status": "AUTORIZADA",
   "nota": { "id": "uuid", "cpf": "529.982.247-25", "produto": "Dipirona" },
-  "protocoloSefaz": "SEFAZ-1714123456789",
+  "protocoloSefaz": "SEFAZ-...",
   "protocoloAns": null,
-  "motivo": null
-}
-```
-
-**Resposta de sucesso (medicamento controlado):**
-```json
-{
-  "status": "AUTORIZADA",
-  "nota": { "id": "uuid", "cpf": "529.982.247-25", "produto": "Diazepam" },
-  "protocoloSefaz": "SEFAZ-1714123456789",
-  "protocoloAns": "ANS-1714123456790",
-  "motivo": null
-}
-```
-
-**Resposta de venda negada:**
-```json
-{
-  "status": "NEGADA",
-  "nota": null,
-  "protocoloSefaz": null,
-  "protocoloAns": null,
-  "motivo": "CPF invalido"
+  "motivo": null,
+  "canal": "INTERNET",
+  "vendedor": null,
+  "financeiro": {
+    "valorBruto": 12.90,
+    "percentualDesconto": 15.00,
+    "valorDesconto": 1.94,
+    "valorLiquido": 10.96,
+    "descricaoDesconto": "Desconto convenio (idoso): 15% (maior vantagem)",
+    "comissao": null
+  }
 }
 ```
 
 ---
 
-### 3. Consulta de Notas — `GET /notas`
+## Endpoints
 
-Retorna todas as notas autorizadas armazenadas em memória desde a última inicialização.
-
-```bash
-curl http://localhost:8080/notas
-```
-
-> **Atenção:** os dados são **voláteis** — ao reiniciar a aplicação, todas as notas são perdidas.
+| Método | Rota | Descrição |
+|---|---|---|
+| `POST` | `/venda` | Processa uma venda |
+| `GET` | `/notas` | Lista vendas autorizadas (do MySQL) |
+| `POST` | `/produtos` | Cadastra produto |
+| `GET` | `/produtos` / `/produtos/{id}` | Lista / busca produto |
+| `PUT` | `/produtos/{id}` | Atualiza produto |
+| `DELETE` | `/produtos/{id}` | Remove produto |
+| `POST` | `/clientes` | Cadastra cliente |
+| `GET` | `/clientes` / `/clientes/{id}` | Lista / busca cliente |
+| `PUT` | `/clientes/{id}` | Atualiza cliente |
+| `DELETE` | `/clientes/{id}` | Remove cliente |
+| `GET` | `/relatorios/vendas?inicio=&fim=` | Vendas por período (datas ISO) |
+| `GET` | `/relatorios/mais-vendidos` | Ranking por quantidade vendida |
 
 ---
 
-## Exemplos de Uso
+## Como Executar
 
-```bash
-# Venda aprovada — produto comum
-curl -X POST http://localhost:8080/venda \
-  -H "Content-Type: application/json" \
-  -d '{"cpf":"529.982.247-25","produto":"Dipirona"}'
+```powershell
+# Credenciais do MySQL por variável de ambiente (nunca commitadas)
+$env:DB_USER = "root"
+$env:DB_PASS = "SUA_SENHA_MYSQL"
 
-# Venda aprovada — medicamento controlado (aciona ANS)
-curl -X POST http://localhost:8080/venda \
-  -H "Content-Type: application/json" \
-  -d '{"cpf":"529.982.247-25","produto":"Diazepam"}'
+mvn clean install                 # compila os 6 módulos
+cd farmacia-service
+mvn spring-boot:run               # sobe na porta 8080
+```
 
-# CPF inválido
-curl -X POST http://localhost:8080/venda \
-  -H "Content-Type: application/json" \
-  -d '{"cpf":"00000000000","produto":"Dipirona"}'
+No primeiro boot, o Hibernate cria as tabelas (`ddl-auto=update`) e o `data.sql`
+popula produtos e clientes. Para o banco já com vendas, importe
+[`db/farmacia-dump.sql`](db/farmacia-dump.sql).
 
-# Produto sem estoque
-curl -X POST http://localhost:8080/venda \
-  -H "Content-Type: application/json" \
-  -d '{"cpf":"529.982.247-25","produto":"Ibuprofeno"}'
+Roteiro completo da demo: [`demo/roteiro.ps1`](demo/roteiro.ps1).
 
-# Listar todas as notas
-curl http://localhost:8080/notas
+---
+
+## Configuração relevante (`application.properties`)
+
+```properties
+spring.datasource.url=jdbc:mysql://localhost:3306/farmacia?createDatabaseIfNotExist=true&...
+spring.datasource.username=${DB_USER:root}
+spring.datasource.password=${DB_PASS:root}
+spring.jpa.hibernate.ddl-auto=update
+spring.sql.init.mode=always                    # roda data.sql também no MySQL
+spring.jpa.defer-datasource-initialization=true # data.sql após o Hibernate criar tabelas
 ```
 
 ---
@@ -268,18 +222,20 @@ curl http://localhost:8080/notas
 
 | Módulo | Artefato | Versão | Tipo |
 |---|---|---|---|
-| `BRADECO-Farmacia` | pom raiz | 1.0.0 | pom |
+| `bradeco-farmacia-parent` | pom raiz | 1.0.0 | pom |
 | `farmacia-service` | farmacia-service | 1.0.0 | jar executável |
 | `cpf-validator-component` | cpf-validator-component | 1.0.0 | jar |
 | `sefaz-component` | sefaz-component | 1.0.0 | jar |
 | `ans-component` | ans-component | 1.0.0 | jar |
 | `fornecedor-component` | fornecedor-component | 1.0.0 | jar |
+| `desconto-component` | desconto-component | 1.0.0 | jar |
 
 ---
 
-## Observações Importantes
+## Observações
 
-- **Sem banco de dados:** todos os dados vivem em memória e são perdidos ao reiniciar.
+- **Persistência real:** os dados sobrevivem a reinícios (MySQL).
 - **Integrações simuladas:** SEFAZ, ANS e Fornecedor não fazem chamadas HTTP reais.
-- **Log físico:** o `fornecedor-component` grava em `{tmp}/fornecedor-legado.log` para simular auditoria de sistema legado.
-- **Porta padrão:** `8080`, configurável em `farmacia-service/src/main/resources/application.properties`.
+- **Componentes reutilizáveis:** lógica de negócio isolada em jars — base para a v2.
+- **Senha do banco:** sempre via `DB_USER`/`DB_PASS`; nunca commitada.
+- **Porta padrão:** `8080`.
