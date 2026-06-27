@@ -15,6 +15,9 @@ import com.farmacia.model.Canal;
 import com.farmacia.model.Cliente;
 import com.farmacia.model.Produto;
 import com.farmacia.model.Venda;
+import com.farmacia.rabbitmq.event.VendaAutorizadaEvent;
+import com.farmacia.rabbitmq.event.VendaNegadaEvent;
+import com.farmacia.rabbitmq.producer.VendaEventProducer;
 import com.farmacia.repository.ClienteRepository;
 import com.farmacia.repository.ProdutoRepository;
 import com.farmacia.repository.VendaRepository;
@@ -30,7 +33,6 @@ import java.util.UUID;
 @Service
 public class VendaService {
 
-    /** Comissão do vendedor em vendas de balcão: 5% sobre o valor líquido. */
     private static final BigDecimal COMISSAO_PERCENTUAL = new BigDecimal("0.05");
 
     private final CpfValidator cpfValidator;
@@ -41,6 +43,7 @@ public class VendaService {
     private final VendaRepository repository;
     private final ProdutoRepository produtoRepository;
     private final ClienteRepository clienteRepository;
+    private final VendaEventProducer eventProducer;
 
     public VendaService(CpfValidator cpfValidator,
                         FornecedorAdapter fornecedor,
@@ -49,7 +52,8 @@ public class VendaService {
                         CalculadoraDesconto calculadoraDesconto,
                         VendaRepository repository,
                         ProdutoRepository produtoRepository,
-                        ClienteRepository clienteRepository) {
+                        ClienteRepository clienteRepository,
+                        VendaEventProducer eventProducer) {
         this.cpfValidator = cpfValidator;
         this.fornecedor = fornecedor;
         this.sefaz = sefaz;
@@ -58,6 +62,7 @@ public class VendaService {
         this.repository = repository;
         this.produtoRepository = produtoRepository;
         this.clienteRepository = clienteRepository;
+        this.eventProducer = eventProducer;
     }
 
     public VendaResponse processar(VendaRequest req) {
@@ -65,7 +70,7 @@ public class VendaService {
         String nomeProduto = req.produto();
 
         if (nomeProduto == null || nomeProduto.trim().isEmpty()) {
-            return negada("Requisição vazia");
+            return negar(req, null, "Requisição vazia");
         }
 
         // Fase 5: canal da venda. INTERNET é o padrão quando omitido; BALCAO exige vendedor.
@@ -76,22 +81,22 @@ public class VendaService {
             try {
                 canal = Canal.valueOf(req.canal().trim().toUpperCase());
             } catch (IllegalArgumentException e) {
-                return negada("canal invalido: use INTERNET ou BALCAO");
+                return negar(req, null, "canal invalido: use INTERNET ou BALCAO");
             }
         }
         String vendedor = (req.vendedor() == null || req.vendedor().isBlank())
                 ? null : req.vendedor().trim();
         if (canal == Canal.BALCAO && vendedor == null) {
-            return negada("venda no balcao exige o vendedor");
+            return negar(req, canal, "venda no balcao exige o vendedor");
         }
         if (canal != Canal.BALCAO) {
-            vendedor = null; // comissão/vendedor só fazem sentido no balcão
+            vendedor = null;
         }
 
         // O produto precisa estar cadastrado (fonte da verdade sobre controlado/estoque/preço).
         Optional<Produto> cadastrado = produtoRepository.findByNomeIgnoreCase(nomeProduto.trim());
         if (cadastrado.isEmpty()) {
-            return negada("produto nao cadastrado");
+            return negar(req, canal, "produto nao cadastrado");
         }
         Produto produto = cadastrado.get();
 
@@ -100,21 +105,21 @@ public class VendaService {
         boolean temCpf = cpf != null && !cpf.isBlank();
         if (produto.isControlado()) {
             if (!temCpf) {
-                return negada("produto controlado exige CPF do cliente");
+                return negar(req, canal, "produto controlado exige CPF do cliente");
             }
             if (!cpfValidator.validar(cpf)) {
-                return negada("CPF invalido");
+                return negar(req, canal, "CPF invalido");
             }
         } else if (temCpf && !cpfValidator.validar(cpf)) {
-            return negada("CPF invalido");
+            return negar(req, canal, "CPF invalido");
         }
 
         // Disponibilidade no fornecedor (componente externo) e estoque local da farmácia.
         if (!fornecedor.consultar(produto.getNome())) {
-            return negada("produto indisponivel no fornecedor");
+            return negar(req, canal, "produto indisponivel no fornecedor");
         }
         if (produto.getEstoque() <= 0) {
-            return negada("produto sem estoque");
+            return negar(req, canal, "produto sem estoque");
         }
 
         NotaFiscal nota = new NotaFiscal(UUID.randomUUID().toString(), cpf, produto.getNome());
@@ -125,8 +130,7 @@ public class VendaService {
             protocoloAns = ans.enviarReceita(cpf, produto.getNome());
         }
 
-        // Fase 4: desconto. O cliente cadastrado (encontrado por CPF) habilita o
-        // desconto progressivo; idoso + convênio podem render a maior vantagem.
+        // Fase 4: desconto progressivo para clientes cadastrados.
         Optional<Cliente> cliente = temCpf ? clienteRepository.findByCpf(cpf.trim()) : Optional.empty();
         DescontoResultado desconto = calculadoraDesconto.calcular(new DescontoContexto(
                 produto.getPreco(),
@@ -143,7 +147,7 @@ public class VendaService {
         produto.setEstoque(produto.getEstoque() - 1);
         produtoRepository.save(produto);
 
-        // Persiste a venda autorizada no banco (NEGADAs não são gravadas, como antes).
+        // Persiste a venda autorizada no banco (NEGADAs não são gravadas).
         Venda venda = new Venda("AUTORIZADA", cpf, produto.getNome(), nota.id(),
                 protocoloSefaz, protocoloAns, null, LocalDateTime.now());
         venda.setValorBruto(produto.getPreco());
@@ -155,6 +159,13 @@ public class VendaService {
         venda.setVendedor(vendedor);
         venda.setComissao(comissao);
         repository.save(venda);
+
+        // Publica evento de venda autorizada no RabbitMQ.
+        eventProducer.publicarVendaAutorizada(new VendaAutorizadaEvent(
+                venda.getId(), cpf, produto.getNome(), produto.isControlado(),
+                canal, vendedor, nota.id(), protocoloSefaz, protocoloAns,
+                desconto.valorLiquido(), comissao, produto.getEstoque(),
+                venda.getDataHora()));
 
         return new VendaResponse("AUTORIZADA", nota, protocoloSefaz, protocoloAns, null,
                 canal.name(), vendedor,
@@ -169,12 +180,13 @@ public class VendaService {
                 .toList();
     }
 
-    /** Resposta de venda recusada (sem nota nem valores). */
-    private VendaResponse negada(String motivo) {
+    /** Rejeita a venda e publica o evento de venda negada no RabbitMQ. */
+    private VendaResponse negar(VendaRequest req, Canal canal, String motivo) {
+        eventProducer.publicarVendaNegada(new VendaNegadaEvent(
+                req.cpf(), req.produto(), canal, motivo, LocalDateTime.now()));
         return new VendaResponse("NEGADA", null, null, null, motivo, null, null, null);
     }
 
-    /** Reconstrói o DTO de resposta a partir da entidade persistida. */
     private VendaResponse toResponse(Venda v) {
         NotaFiscal nota = new NotaFiscal(v.getNotaId(), v.getCpf(), v.getProduto());
         ResumoFinanceiro financeiro = new ResumoFinanceiro(v.getValorBruto(),

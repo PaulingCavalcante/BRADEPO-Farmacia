@@ -2,8 +2,14 @@
 # Roteiro de demonstração — BRADEPO-Farmacia (Projeto 2)
 #
 # Executa, em ordem, o fluxo que cobre todas as features para o vídeo.
-# Pré-requisito: a aplicação rodando em http://localhost:8080
-#   (em outro terminal:  cd farmacia-service ; mvn spring-boot:run)
+#
+# Pré-requisitos:
+#   1. MySQL + RabbitMQ rodando:
+#        docker compose up -d
+#   2. Aplicação rodando em http://localhost:8080:
+#        cd farmacia-service ; mvn spring-boot:run
+#   3. (Opcional) RabbitMQ Management UI:
+#        http://localhost:15672  (guest/guest) — acompanhe mensagens em tempo real
 #
 # Rodar:  pwsh demo/roteiro.ps1     (ou clicar com botão direito > Run with PowerShell)
 # ============================================================================
@@ -71,6 +77,15 @@ Get-Json "$base/relatorios/vendas?inicio=2026-06-01&fim=2026-06-30"
 
 Passo "13) Relatorio: produtos mais vendidos"
 Get-Json "$base/relatorios/mais-vendidos"
+
+Passo "14) RabbitMQ — verificar eventos publicados"
+Write-Host "Acesse http://localhost:15672 (guest/guest) e confira as filas:" -ForegroundColor White
+Write-Host "  farmacia.venda.autorizada  -> consumida por AuditConsumer" -ForegroundColor Gray
+Write-Host "  farmacia.venda.negada      -> consumida por AuditConsumer" -ForegroundColor Gray
+Write-Host "  farmacia.venda.controlado  -> consumida por ControladoAlertaConsumer" -ForegroundColor Gray
+Write-Host "  farmacia.estoque.alerta    -> consumida por EstoqueAlertaConsumer" -ForegroundColor Gray
+Write-Host ""
+Write-Host "Os eventos [AUDIT], [VIGILANCIA] e [ESTOQUE] aparecem nos logs da aplicacao." -ForegroundColor Yellow
 
 Write-Host ""
 Write-Host "Fim do roteiro." -ForegroundColor Green
